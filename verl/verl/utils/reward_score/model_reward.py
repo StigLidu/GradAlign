@@ -21,7 +21,7 @@ import sys
 from verl.utils.reward_score.countdown_judge import judge_countdown
 MAX_CONCURRENT_CALLS = 2048
 
-client = # Your model judge client
+client = None # TODO: Your model judge client
 print(f"[Model Judge] Using max {MAX_CONCURRENT_CALLS} concurrent API calls")
 
 JUDGE_PROMPT = """Please judge if the student's answer is equivalent to the ground truth answer:
@@ -59,7 +59,7 @@ async def model_judge_call(solution_str, ground_truth, task):
         # Direct async API call
         response = await asyncio.wait_for(
             client.chat_completions(
-                model=service,
+                model=None, # TODO: Your model name
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
