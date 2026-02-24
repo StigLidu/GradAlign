@@ -194,7 +194,10 @@ python launch_verl_training.py \
 
 ## 6) Export merged model
 
-After training, merge distributed checkpoints into an HF-style model directory:
+`merge_model.py` merges checkpoints from:
+`<ckpt_root>/<experiment_name>/global_step_<step>/actor`
+
+Manual merge example:
 
 ```bash
 cd automated
@@ -210,11 +213,15 @@ python merge_model.py \
 ## 7) Output artifacts
 
 Typical artifacts under `ckpt_root/<experiment_name>/`:
-- `chunks/chunk_*/train.jsonl`: chunked candidate pools.
-- `global_step_*/train_split/part_*/responses_sorted.json`: rollout outputs.
-- `global_step_*/train_split/similarity_results_aggregated.jsonl`: aggregated similarity.
-- `global_step_*/train_split/accuracy_by_problem.jsonl`: per-problem accuracy.
-- `selected/iter_<i>_<mode>_<n>/train.jsonl`: selected subsets used for training.
+- `chunks/chunk_*/train.jsonl` and `chunks/chunk_*/train.parquet`: chunked candidate pools.
+- `global_step_*/train_split/part_0/responses.json` and `responses_sorted.json`: train rollouts.
+- `global_step_*/train_split/part_0/similarity_results_cosine_real.jsonl`: per-response similarity (parallel analysis output).
+- `global_step_*/train_split/similarity_results_aggregated.jsonl`: per-problem aggregated similarity.
+- `global_step_*/train_split/accuracy_by_problem.jsonl`: per-problem accuracy (and similarity when available).
+- `global_step_*/val_responses/responses.json` and `responses_sorted.json`: validation rollouts (for similarity-based modes).
+- `global_step_*/merged/`: merged model used by the next selection round (dynamic selection runs).
+- `selected/iter_<i>_<mode>_<n>/train.jsonl` and `train.parquet`: selected training subset for that iteration.
+- `global_step_*/actor/` (from VERL): training checkpoint shards used as merge input.
 
 ## Citation
 
