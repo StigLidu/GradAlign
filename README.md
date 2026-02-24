@@ -2,9 +2,9 @@
 
 Official implementation for the paper:
 
-**GradAlign: Gradient-Aligned Data Selection for LLM Reinforcement Learning**  
-Ningyuan Yang*, Weihua Du*, Weiwei Sun, Sean Welleck, Yiming Yang  
-Preprint (February 24, 2026)
+>**GradAlign: Gradient-Aligned Data Selection for LLM Reinforcement Learning**  
+>Ningyuan Yang*, Weihua Du*, Weiwei Sun, Sean Welleck, Yiming Yang  
+>Preprint
 
 GradAlign is an online RL data-selection method that ranks candidate training problems by alignment between:
 - candidate GRPO gradients and
