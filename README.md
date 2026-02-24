@@ -1,173 +1,227 @@
-# GradAlign: Online Data Selection for Scalable LLM Reinforcement Learning via Gradient Alignment
+# GradAlign: Gradient-Aligned Data Selection for LLM Reinforcement Learning
 
-GradAlign is an online data selection method for reinforcement learning (RL) post-training of large language models. It selects high-quality training problems by measuring the alignment between per-problem policy gradients and the aggregated validation gradient.
+Official implementation for the paper:
 
+**GradAlign: Gradient-Aligned Data Selection for LLM Reinforcement Learning**  
+Ningyuan Yang*, Weihua Du*, Weiwei Sun, Sean Welleck, Yiming Yang  
+Preprint (February 24, 2026)
 
-## Code Structure
+GradAlign is an online RL data-selection method that ranks candidate training problems by alignment between:
+- candidate GRPO gradients and
+- an aggregated gradient from a small trusted validation set.
 
-```
-├── automated/                  # Orchestration and pipeline scripts
-│   ├── config.py               # Model paths, dataset directories, model type mappings
-│   ├── prepare_data.py         # Download and standardize datasets to VERL format
-│   ├── mix.py                  # Mix slices from multiple datasets
-│   ├── dynamic_selection.py    # Main selection loop: chunk → infer → analyze → select → train
-│   ├── launch_verl_training.py # Launch GRPO training via VERL
-│   ├── run_inference_local.py  # Run vLLM inference for rollout generation
-│   ├── run_parallel_analysis.py# Dispatch gradient analysis across parts
-│   ├── aggregate.py            # Aggregate per-response results to per-problem scores
-│   ├── select_data.py          # Select top-N problems by similarity, accuracy, or random
-│   ├── merge_model.py          # Merge distributed checkpoints to HuggingFace format
-│   ├── convert_megatron_optimizer_to_hf.py  # Convert Megatron optimizer state
-│   └── sort_responses.py       # Sort inference responses by group
-│
-├── select/                     # Core gradient analysis modules
-│   ├── grpo_grad_analyze.py    # Single-GPU GRPO gradient analyzer
-│   ├── grpo_loss.py            # GRPO loss: advantages, policy loss, KL loss, log-probs
-│   ├── grpo_utils.py           # Batching, masking, checkpointing utilities
-│   ├── grpo_trainer.py         # GRPO trainer (for reference/baseline training)
-│   ├── analyze_grpo.py         # End-to-end analysis driver (single-GPU)
-│   ├── analyze_similarity.py   # Cosine similarity computation between gradient vectors
-│   ├── inference_vllm.py       # vLLM-based rollout generation
-│   ├── inference_ray_batch.py  # Ray-based batch inference
-│   ├── inference_client.py     # API-based inference client
-│   ├── train_grpo.py           # Standalone GRPO training script
-│   ├── utils.py                # Shared utilities
-│   └── parallel/               # Multi-GPU parallel gradient analysis
-│       ├── launch_parallel_analysis.py     # Launcher for distributed analysis
-│       ├── grpo_grad_analyze_parallel.py   # FSDP-based parallel gradient computation
-│       ├── analyze_grpo_parallel.py        # Parallel analysis coordinator
-│       ├── grpo_loss.py                    # GRPO loss (parallel variant)
-│       ├── grpo_utils.py                   # Utilities (parallel variant)
-│       └── prepare.py                      # Data preparation for parallel analysis
-│
-├── verl/                       # Modified VERL framework (RL training backbone)
-│   └── verl/utils/reward_score/
-│       └── model_reward.py     # Custom reward: rule-based + LLM judge (Qwen-72B)
+The method is designed for non-stationary LLM RL and targets three practical regimes from the paper:
+- unreliable reward signals,
+- distribution imbalance, and
+- low-utility large-scale web corpora.
+
+## Repository layout
+
+```text
+.
+|-- automated/                   # End-to-end orchestration scripts
+|   |-- prepare_data.py          # Dataset download + conversion to VERL-style JSONL/Parquet
+|   |-- dynamic_selection.py     # Main loop: infer -> analyze -> aggregate -> select -> train
+|   |-- run_inference_local.py   # vLLM/Ray rollout generation
+|   |-- run_parallel_analysis.py # Distributed gradient alignment driver
+|   |-- aggregate.py             # Per-problem similarity/accuracy aggregation
+|   |-- select_data.py           # Selection policies (sim, dot, accgreedy, align, rand, ...)
+|   |-- launch_verl_training.py  # GRPO training launcher (VERL backend)
+|   |-- merge_model.py           # Merge distributed checkpoints to HF format
+|   `-- config.py                # Local model/data path config
+|-- select/                      # Gradient/similarity analysis implementation
+|-- verl/                        # Modified VERL training framework
+`-- scripts/                     # Utility scripts
 ```
 
-## Supported Selection Modes
+## Selection modes
 
-| Mode | Flag | Description |
-|------|------|-------------|
-| **GradAlign (cosine)** | `--mode sim` | Rank by cosine similarity between candidate and validation gradients (default, recommended) |
-| **GradAlign (dot product)** | `--mode dot` | Rank by inner product between gradients |
-| **AccGreedy** | `--mode accgreedy` | Select problems with pass rates closest to 50% |
-| **LearnAlign** | `--mode align` | Gradient similarity within training set (no external validation) |
-| **Random** | Please directly use launch_verl_training |
+| Paper name | `--mode` | Description |
+|---|---|---|
+| GradAlign (cosine) | `sim` | Cosine similarity between candidate and validation gradients (default in paper) |
+| GradAlign (dot) | `dot` | Dot product similarity |
+| LearnAlign | `align` | Gradient alignment without external validation set |
+| AccGreedy | `accgreedy` | Prioritize problems with pass rate closest to 50% |
+| Random | `rand` | Uniform random selection |
 
-## Setup
+## 1) Environment setup
 
-### Installation
-See https://verl.readthedocs.io/en/latest/start/install.html.
+Follow VERL installation instructions: https://verl.readthedocs.io/en/latest/start/install.html
 
-### Configuration
+Typical local setup:
 
-Edit `automated/config.py` to set your environment:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r verl/requirements.txt
+pip install -e ./verl
+```
+
+Notes:
+- `select/inference_ray_batch.py` requires `ray>=2.44.1`.
+- Multi-GPU analysis/training depends on your local CUDA, NCCL, and vLLM stack.
+
+## 2) Configuration
+
+### 2.1 Edit `automated/config.py`
+
+Set model aliases and data roots:
 
 ```python
-# Map model keys to local/remote paths
 MODELS = {
     "qwen2.5-1.5b-math": "/path/to/Qwen2.5-1.5B-Math-Instruct",
-    "qwen3-8b-base":     "/path/to/Qwen3-8B-Base",
+    "qwen3-8b-base": "/path/to/Qwen3-8B-Base",
 }
 
-# Base directories for datasets and responses
 BASE_DATA_DIR = "/path/to/data"
 BASE_RESPONSES_DIR = "/path/to/responses"
 ```
 
-The reward function in `verl/verl/utils/reward_score/model_reward.py` uses a model judge (Qwen2.5-72B-Instruct by default). Configure the API client at the top of that file.
+### 2.2 Configure the model-judge reward
 
-## Usage
+`verl/verl/utils/reward_score/model_reward.py` contains the async model-judge path used by this codebase. Configure your API client/service there before running experiments that enable model judging.
 
-### 1. Prepare Datasets
+### 2.3 Important path assumption
 
-Download and convert datasets to the standardized format:
+`automated/launch_verl_training.py` currently assumes VERL config/reward files under `~/data_selection/...` by default.  
+If your repo path differs, update that script or pass matching paths/overrides before launching large runs.
+
+## 3) Data preparation
+
+Prepare datasets to unified VERL-style records (`train.jsonl`, `train.parquet`, `val.jsonl`, `val.parquet`):
 
 ```bash
 cd automated
-
-# Training data
 python prepare_data.py --dataset dapo
 python prepare_data.py --dataset webinstruct
-
-# Validation / test data
 python prepare_data.py --dataset amc22
 python prepare_data.py --dataset amc23
 python prepare_data.py --dataset aime
 ```
 
-Supported datasets: `dapo`, `webinstruct`, `amc22`, `amc23`, `aime`, `math`, `gsm8k`, `mmlupro`, `supergpqa`, `theoremqa`, `deepscaler`, `metamath`, `strategyqa`, `math500`.
+Supported dataset keys in `prepare_data.py` include:
+`aime24`, `aime25`, `aime`, `math`, `metamath`, `strategyqa`, `webinstruct`, `deepscaler`, `mmlupro`, `gsm8k`, `theoremqa`, `supergpqa`, `amc22`, `amc23`, `math500`, `dapo`.
 
-### 2. Mix Datasets (optional)
-
-Combine datasets to create training pools:
+Optional dataset mixing:
 
 ```bash
 cd automated
-python mix.py --datasets countdown webinstruct dapo \
-              --nums 4000 20000 10000 \
-              --ls 0 0 0 \
-              --output_name countdown_mixed
+python mix.py \
+  --datasets dapo webinstruct \
+  --nums 10000 20000 \
+  --ls 0 0 \
+  --output_name dapo_webinstruct_mix
 ```
 
-### 3. Run GradAlign Selection + Training
+## 4) Run GradAlign end-to-end
 
-The `dynamic_selection.py` script orchestrates the full pipeline loop (chunk data, generate rollouts, compute gradient alignment, select top-k, train):
+`dynamic_selection.py` orchestrates:
+1. chunk candidate data,
+2. rollout generation,
+3. gradient alignment analysis,
+4. top-k selection,
+5. GRPO training on selected subsets.
+
+Example:
 
 ```bash
 cd automated
 python dynamic_selection.py \
-    --prefix gradalign_exp \
-    --model qwen3-8b-base \
-    --train_dataset webinstruct \
-    --val_dataset amc22 \
-    --chunk_size 5120 \
-    --iters_per_select 10 \
-    --max_tokens 3072 \
-    --k 20 \
-    --mode sim \
-    --num_selections 200 \
-    --train_batch_size 128 \
-    --verl_val_set amc_mc_aime_amc_mmlupro \
-    --minibatch_size 8 \
-    --reward_path model_reward.py \
-    --reward_manager prime \
-    --n_samples_train 64
+  --prefix gradalign_exp \
+  --model qwen3-8b-base \
+  --train_dataset webinstruct \
+  --val_dataset amc22 \
+  --chunk_size 5120 \
+  --k 20 \
+  --mode sim \
+  --num_selections 100 \
+  --train_batch_size 128 \
+  --iters_per_select 10 \
+  --n_samples_train 128 \
+  --n_samples_val 16 \
+  --minibatch_size 8 \
+  --max_tokens 3072 \
+  --max_model_len 4096 \
+  --ckpt_root /path/to/checkpoints \
+  --verl_val_set amc22
 ```
 
-Key parameters:
-- `--chunk_size`: Number of candidate problems per selection round (M in the paper)
-- `--k`: Selection ratio; selects chunk_size/k problems per round
-- `--mode`: Selection strategy (`sim`, `dot`, `accgreedy`, `align`, `rand`)
-- `--n_samples_train` / `--n_samples_val`: Rollout samples per problem for gradient estimation (k_r and k_v in the paper)
-- `--iters_per_select`: Number of GRPO training iterations between selection rounds
-- `--num_selections`: Total number of selection rounds
+Important arguments:
+- `--chunk_size`: number of candidate problems per round (`M` in paper).
+- `--k`: selection ratio (`q` in paper), selecting `chunk_size / k` each round.
+- `--mode`: selection policy (`sim`, `dot`, `accgreedy`, `align`, `rand`, ...).
+- `--n_samples_train`, `--n_samples_val`: rollout counts used in gradient estimation (`k_r`, `k_v`).
+- `--iters_per_select`: GRPO update steps between selection rounds.
+- `--num_selections`: number of selection rounds.
 
-### 4. Random Selection Baseline (No Data Selection)
+Constraint enforced by code:
+- `(k * train_batch_size * iters_per_select) % chunk_size == 0`
 
-Equivalent to training on the random dataset:
+## 5) Baselines
+
+Random baseline through the same loop:
+
+```bash
+cd automated
+python dynamic_selection.py \
+  --prefix random_baseline \
+  --model qwen3-8b-base \
+  --train_dataset webinstruct \
+  --val_dataset amc22 \
+  --chunk_size 5120 \
+  --k 20 \
+  --mode rand \
+  --num_selections 100 \
+  --train_batch_size 128 \
+  --iters_per_select 10 \
+  --ckpt_root /path/to/checkpoints \
+  --verl_val_set amc22
+```
+
+Direct GRPO training without data selection:
 
 ```bash
 cd automated
 python launch_verl_training.py \
-    --prefix baseline \
-    --model qwen3-8b-base \
-    --train_dataset webinstruct \
-    --val_dataset amc_mc_aime_amc_mmlupro \
-    --max_response_length 3072 \
-    --save_freq 10 \
-    --total_epochs 1000 \
-    --train_batch_size 128 \
-    --reward_path model_reward.py \
-    --reward_manager prime
+  --prefix grpo_baseline \
+  --model qwen3-8b-base \
+  --train_dataset webinstruct \
+  --val_dataset amc22 \
+  --train_batch_size 128 \
+  --max_response_length 3072 \
+  --total_epochs 1000
 ```
+
+## 6) Export merged model
+
+After training, merge distributed checkpoints into an HF-style model directory:
+
+```bash
+cd automated
+python merge_model.py \
+  --experiment_name <experiment_name> \
+  --step <global_step> \
+  --output_model_name <merged_name> \
+  --backend megatron \
+  --ckpt_root /path/to/checkpoints \
+  --dest_root /path/to/merged_models
+```
+
+## 7) Output artifacts
+
+Typical artifacts under `ckpt_root/<experiment_name>/`:
+- `chunks/chunk_*/train.jsonl`: chunked candidate pools.
+- `global_step_*/train_split/part_*/responses_sorted.json`: rollout outputs.
+- `global_step_*/train_split/similarity_results_aggregated.jsonl`: aggregated similarity.
+- `global_step_*/train_split/accuracy_by_problem.jsonl`: per-problem accuracy.
+- `selected/iter_<i>_<mode>_<n>/train.jsonl`: selected subsets used for training.
 
 ## Citation
 
 ```bibtex
-@article{gradalign2025,
-  title={GradAlign: Online Data Selection for Scalable LLM Reinforcement Learning via Gradient Alignment},
-  year={2025}
-}
+Coming soon!
 ```
+
+## Acknowledgment
+
+This repository is built on top of VERL (`verl/`) and includes project-specific modifications for GradAlign data selection and analysis.
