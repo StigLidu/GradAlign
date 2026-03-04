@@ -226,7 +226,12 @@ Typical artifacts under `ckpt_root/<experiment_name>/`:
 ## Citation
 
 ```bibtex
-Coming soon!
+@article{yang2026gradalign,
+  title={GradAlign: Gradient-Aligned Data Selection for LLM Reinforcement Learning},
+  author={Yang, Ningyuan and Du, Weihua and Sun, Weiwei and Welleck, Sean and Yang, Yiming},
+  journal={arXiv preprint arXiv:2602.21492},
+  year={2026}
+}
 ```
 
 ## Acknowledgment
